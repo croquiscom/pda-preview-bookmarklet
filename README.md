@@ -1,3 +1,3 @@
 # pda-preview-bookmarklet
 
-github pages: https://cobiyu-dev.github.io/pda-preview-bookmarklet/
+github pages: https://croquiscom.github.io/pda-preview-bookmarklet/
