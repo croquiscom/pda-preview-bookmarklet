@@ -510,12 +510,16 @@
     function renderLogin() {
         const root = getRootElement();
         root.innerHTML = `
-            <div class="vms-login-layer">
+            <div class="vms-header" id="vms-header-bar" style="background: #2c3e50; border-bottom: none;">
+                <span style="font-weight:bold; color: #ecf0f1;">🏗️ 분류 작업대</span>
+                <button id="vms-login-close-btn" class="vms-ctrl-btn" title="닫기">✕</button>
+            </div>
+            <div class="vms-login-layer" style="position: relative; inset: auto; flex: 1; width: 100%;">
                 <div style="font-size:50px; margin-bottom:20px;">🏗️</div>
                 <div class="vms-login-card">
-                    <h3>소터 작업대 바코드</h3>
+                    <h3>분류 작업대 바코드</h3>
                     <input id="vms-ws-id" style="width:100%; padding:10px; margin-bottom:10px; box-sizing:border-box;"
-                           placeholder="WS-01" value="ASST00035">
+                           placeholder="WS-01" value="ASST00076">
                     <button id="vms-login-btn" style="width:100%; padding:10px; background:#3498db; color:white;
                                                       border:none; border-radius:4px; cursor:pointer;">
                         CONNECT
@@ -528,6 +532,11 @@
     }
 
     function attachLoginHandlers() {
+        enableDragAndDrop();
+
+        const closeBtn = document.getElementById('vms-login-close-btn');
+        if (closeBtn) closeBtn.onclick = handleClose;
+
         const input = document.getElementById('vms-ws-id');
         const btn = document.getElementById('vms-login-btn');
 
@@ -580,7 +589,7 @@
         return `
             <div class="vms-header" id="vms-header-bar">
                 <div style="display:flex; align-items:center;">
-                    <span style="font-weight:bold; font-size:16px;">🏗️ Mini Sorter</span>
+                    <span style="font-weight:bold; font-size:16px;">🏗️ 분류 작업대</span>
                     <span id="vms-status-sub" style="font-size:12px; margin-left:15px; opacity:0.8;
                                                      background:rgba(255,255,255,0.1); padding:2px 8px;
                                                      border-radius:10px;">${STATE.workstationId}</span>
