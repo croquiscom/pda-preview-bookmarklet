@@ -237,7 +237,6 @@
             "skuNo" : skuId,
             "containerNo" : grid.destTote,
             "waveNo" : STATE.workflowId,
-            "orderNo" : grid.assignedOrderId,
             "gridNo" : gridNo,
             "stationId" : String(STATE.stationId),
             "centerId" : "5"
@@ -291,7 +290,6 @@
         const payload = {
             "containerNo": grid.destTote,
             "gridNo": gridNo,
-            "orderNo": grid.assignedOrderId,
             "status": "FINISHED",
             "waveNo": STATE.workflowId,
             "stationId": String(STATE.stationId),
