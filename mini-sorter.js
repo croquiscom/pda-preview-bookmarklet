@@ -217,20 +217,54 @@
         }
     }
 
+    async function postFeedback(url, payload, label) {
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-wms-api-key': 'f1dc5be4-78c0-4a95-922e-c1dc5567211f',
+                    'x-wms-sorter-station-id': String(STATE.stationId),
+                    'x-wms-sorter-center-id': '5'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (!res.ok) {
+                const body = await res.text().catch(() => '');
+                showToast(`[${label}] HTTP ${res.status} 오류\nPath: ${url}\nReq: ${JSON.stringify(payload)}\nRes: ${body}`, 'error');
+                console.error(`❌ ${label} HTTP Error:`, res.status);
+                return false;
+            }
+
+            const json = await res.json();
+            if (json.code !== 0) {
+                showToast(`[${label}] ${json.message || '오류가 발생했습니다.'}\nPath: ${url}\nReq: ${JSON.stringify(payload)}\nRes: ${JSON.stringify(json)}`, 'error');
+                console.error(`❌ ${label} API Error:`, json);
+                return false;
+            }
+
+            console.log(`✅ ${label} Sent:`, payload);
+            return true;
+        } catch (e) {
+            showToast(`[${label}] 서버 연결 실패\nPath: ${url}\nReq: ${JSON.stringify(payload)}`, 'error');
+            console.error(`❌ ${label} Network Error:`, e);
+            return false;
+        }
+    }
+
     async function sendDropFeedback(grid, skuBarcode) {
         if (!STATE.stationId) return false;
 
         const order = STATE.orderPool.find(o => o.orderId === grid.assignedOrderId);
         if (!order) return false;
 
-        // Find skuId from barcode
         let skuId = skuBarcode;
-        // Check skuInfo for mapping
         if (order.skuInfo && order.skuInfo[skuBarcode]) {
             skuId = order.skuInfo[skuBarcode].id;
         }
 
-        const gridNo = grid.id.replace('GRID-', '').replace(/^0+/, ''); // GRID-02 -> 2
+        const gridNo = grid.id.replace('GRID-', '').replace(/^0+/, '');
 
         const payload = {
             "pickingContainerNo" : STATE.sourceTote,
@@ -242,30 +276,7 @@
             "centerId" : "5"
         };
 
-        try {
-            const res = await fetch('/api/sorter/v3.0/product-drop-feedback', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-wms-api-key': 'f1dc5be4-78c0-4a95-922e-c1dc5567211f',
-                    'x-wms-sorter-station-id': String(STATE.stationId),
-                    'x-wms-sorter-center-id': '5'
-                },
-                body: JSON.stringify(payload)
-            });
-            
-            const json = await res.json();
-            if (json.status && json.status !== 'OK') {
-                showToast(json.message || "오류가 발생했습니다.", 'error');
-                return false;
-            }
-
-            console.log("✅ Drop Feedback Sent:", payload);
-            return true;
-        } catch (e) {
-            console.error("❌ Drop Feedback Failed:", e);
-            return false;
-        }
+        return await postFeedback('/api/sorter/v3.0/product-drop-feedback', payload, 'Drop Feedback');
     }
 
     async function sendOrderFeedback(grid) {
@@ -297,30 +308,7 @@
             "details": details
         };
 
-        try {
-            const res = await fetch('/api/sorter/v3.0/customer-order-feedback', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-wms-api-key': 'f1dc5be4-78c0-4a95-922e-c1dc5567211f',
-                    'x-wms-sorter-station-id': String(STATE.stationId),
-                    'x-wms-sorter-center-id': '5'
-                },
-                body: JSON.stringify(payload)
-            });
-
-            const json = await res.json();
-            if (json.status && json.status !== 'OK') {
-                showToast(json.message || "오류가 발생했습니다.", 'error');
-                return false;
-            }
-
-            console.log("✅ Order Feedback (FINISHED) Sent:", payload);
-            return true;
-        } catch (e) {
-            console.error("❌ Order Feedback Failed:", e);
-            return false;
-        }
+        return await postFeedback('/api/sorter/v3.0/customer-order-feedback', payload, 'Order Feedback');
     }
 
     async function sendWaveFeedback() {
@@ -333,30 +321,7 @@
             "centerId": "5"
         };
 
-        try {
-            const res = await fetch('/api/sorter/v3.0/wave-order-feedback', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-wms-api-key': 'f1dc5be4-78c0-4a95-922e-c1dc5567211f',
-                    'x-wms-sorter-station-id': String(STATE.stationId),
-                    'x-wms-sorter-center-id': '5'
-                },
-                body: JSON.stringify(payload)
-            });
-
-            const json = await res.json();
-            if (json.status && json.status !== 'OK') {
-                showToast(json.message || "오류가 발생했습니다.", 'error');
-                return false;
-            }
-
-            console.log("✅ Wave Feedback (FINISHED) Sent:", payload);
-            return true;
-        } catch (e) {
-            console.error("❌ Wave Feedback Failed:", e);
-            return false;
-        }
+        return await postFeedback('/api/sorter/v3.0/wave-order-feedback', payload, 'Wave Feedback');
     }
 
     function buildGraphQLQuery() {
@@ -965,11 +930,19 @@
                 // 1. Product Drop Feedback
                 const dropSuccess = await sendDropFeedback(targetGrid, sku);
                 if (!dropSuccess) {
-                     // If failed, sync with server to rollback optimistic UI updates
                     await fetchStationData(STATE.workstationId);
                     return;
                 }
-                
+
+                const order = STATE.orderPool.find(o => o.orderId === targetGrid.assignedOrderId);
+                if (order) {
+                    const totalQty = Object.values(order.requiredItems).reduce((a, b) => a + b, 0);
+                    const currentQty = Object.values(targetGrid.scannedItems)
+                        .filter(v => typeof v === 'number')
+                        .reduce((a, b) => a + b, 0);
+                    showToast(`[${targetGrid.id}] 스캔 완료 (${currentQty}/${totalQty})`, 'scan-success');
+                }
+
                 // 2. Customer Order Feedback (If grid complete)
                 if (checkIfGridComplete(targetGrid)) {
                     const orderSuccess = await sendOrderFeedback(targetGrid);
@@ -1144,15 +1117,26 @@
         toast.className = `vms-toast ${type}`;
         toast.innerText = message;
 
-        container.appendChild(toast);
-
-        // Remove after 3 seconds
-        setTimeout(() => {
+        const dismissToast = () => {
             toast.style.opacity = '0';
             toast.style.transform = 'translateX(100%)';
             toast.style.transition = 'all 0.3s ease-in';
             setTimeout(() => toast.remove(), 300);
-        }, 3000);
+        };
+
+        if (type === 'error') {
+            const closeBtn = document.createElement('span');
+            closeBtn.innerText = ' ✕';
+            closeBtn.style.cssText = 'cursor:pointer; margin-left:8px; font-weight:bold;';
+            closeBtn.onclick = dismissToast;
+            toast.appendChild(closeBtn);
+        }
+
+        container.appendChild(toast);
+
+        if (type !== 'error') {
+            setTimeout(dismissToast, 3000);
+        }
     }
 
     function updateAllUI() {
@@ -1752,6 +1736,7 @@
                 animation: vms-slide-in 0.3s ease-out forwards;
                 opacity: 0; transform: translateX(100%);
                 pointer-events: auto; min-width: 200px;
+                white-space: pre-wrap; word-break: break-all;
             }
             @keyframes vms-slide-in {
                 to { opacity: 1; transform: translateX(0); }
@@ -1762,6 +1747,9 @@
             .vms-toast.wave-complete {
                 background: #8e44ad; border-left: 5px solid #fff;
                 font-size: 16px; padding: 15px 25px;
+            }
+            .vms-toast.scan-success {
+                background: #3498db; border-left: 5px solid #2980b9;
             }
             .vms-toast.error {
                 background: #e74c3c; border-left: 5px solid #c0392b;
