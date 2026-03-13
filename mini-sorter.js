@@ -902,7 +902,7 @@
         }
     }
 
-    function handleSkuScan(skuInp) {
+    async function handleSkuScan(skuInp) {
         const sku = skuInp.value.trim().toUpperCase();
         skuInp.value = '';
         if (!sku) return;
@@ -913,8 +913,7 @@
         }
 
         addToHistory(sku);
-        processSorting(sku);
-        handleRefresh();
+        await processSorting(sku);
     }
 
     function isValidSkuForCurrentTote(sku) {
@@ -1031,10 +1030,10 @@
 
         return STATE.orderPool.every(order => {
             if (order.isComplete) return true;
-            
+
             const grid = STATE.grids.find(g => g.assignedOrderId === order.orderId);
-            if (!grid) return false; 
-            
+            if (!grid) return false;
+
             return checkIfGridComplete(grid);
         });
     }
