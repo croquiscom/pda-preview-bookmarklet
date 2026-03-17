@@ -38,6 +38,8 @@
         grids: [],
         orderPool: [],
         toteInventory: {}, // { 'TOTE-ID': Set('SKU1', 'SKU2') }
+        allocatedStockList: [], // outbound_picking_tote_order_allocated_stock_list (flat array)
+        activeToteTab: 'realtime', // 'instruction' | 'realtime'
 
         // History
         scanHistory: [],
@@ -355,6 +357,17 @@
                             }
                         }
                     }
+                    outbound_picking_tote_order_allocated_stock_list {
+                        picking_tote_location_id
+                        picking_tote_name
+                        sku_id
+                        barcode
+                        qty
+                        order_id
+                        oms_order_id
+                        order_number
+                        order_item_id
+                    }
                 }
             }
         `;
@@ -392,6 +405,7 @@
         STATE.grids = newGrids;
         STATE.orderPool = newOrderPool;
         STATE.toteInventory = newToteInventory;
+        STATE.allocatedStockList = serverData.outbound_picking_tote_order_allocated_stock_list || [];
     }
 
     function processServerGrid(serverGrid, newGrids, newOrderPool, newToteInventory) {
@@ -436,7 +450,7 @@
             }
 
             if (item.picking_tote_list) {
-                processPickingToteList(item.picking_tote_list, sku, pickingToteList, newToteInventory);
+                processPickingToteList(item.picking_tote_list, sku, pickingToteList, newToteInventory, order.oms_order_id, item.order_item_id, order.order_id);
             }
         });
 
@@ -453,13 +467,16 @@
         };
     }
 
-    function processPickingToteList(pickingToteList, sku, outputList, toteInventory) {
+    function processPickingToteList(pickingToteList, sku, outputList, toteInventory, omsOrderId, orderItemId, orderId) {
         pickingToteList.forEach(pt => {
             outputList.push({
                 sku: sku,
                 tote: pt.picking_tote,
                 qty: pt.qty,
-                workedQty: pt.worked_qty
+                workedQty: pt.worked_qty,
+                omsOrderId: omsOrderId,
+                orderItemId: orderItemId,
+                orderId: orderId
             });
 
             if (!toteInventory[pt.picking_tote]) {
@@ -612,6 +629,10 @@
                     <span style="font-weight:bold;">🛒 피킹 토트</span>
                     <button id="vms-side-close-btn" class="vms-ctrl-btn" style="color:#2d3436;">✕</button>
                 </div>
+                <div class="vms-tab-bar">
+                    <button class="vms-tab-btn ${STATE.activeToteTab === 'realtime' ? 'active' : ''}" data-tab="realtime">📦 실시간 재고</button>
+                    <button class="vms-tab-btn ${STATE.activeToteTab === 'instruction' ? 'active' : ''}" data-tab="instruction">📋 작업지시</button>
+                </div>
                 <div id="vms-tote-list" class="vms-tote-list"></div>
             </div>
 
@@ -643,6 +664,15 @@
 
         document.getElementById('vms-side-toggle').onclick = handleToggleSidePanel;
         document.getElementById('vms-side-close-btn').onclick = handleToggleSidePanel;
+
+        document.querySelectorAll('.vms-tab-btn').forEach(btn => {
+            btn.onclick = function() {
+                STATE.activeToteTab = this.dataset.tab;
+                document.querySelectorAll('.vms-tab-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                renderSidePanel();
+            };
+        });
 
         attachInputHandlers();
     }
@@ -1428,50 +1458,68 @@
 
         list.innerHTML = '';
 
+        const panel = document.getElementById('vms-side-panel');
+        if (panel) {
+            panel.style.width = '700px';
+        }
+
+        if (STATE.activeToteTab === 'instruction') {
+            renderInstructionTab(list);
+        } else {
+            renderRealtimeTab(list);
+        }
+    }
+
+    // ── 📋 작업지시 탭 ──
+    function renderInstructionTab(container) {
         if (!STATE.toteInventory || Object.keys(STATE.toteInventory).length === 0) {
-            list.innerHTML = '<div style="text-align:center; padding:20px; color:#bdc3c7;">할당된 Tote가 없습니다.</div>';
+            container.innerHTML = '<div style="text-align:center; padding:20px; color:#bdc3c7;">할당된 Tote가 없습니다.</div>';
             return;
         }
 
         Object.keys(STATE.toteInventory).sort().forEach(toteId => {
-            const card = createToteCard(toteId, STATE.toteInventory[toteId]);
-            list.appendChild(card);
+            const card = createInstructionToteCard(toteId);
+            container.appendChild(card);
         });
     }
 
-    function createToteCard(toteId, skuSet) {
+    function createInstructionToteCard(toteId) {
         const card = document.createElement('div');
         card.className = 'vms-tote-card';
 
-        const skuRows = Array.from(skuSet).map(sku => {
-            // Find SKU Info & Quantity
-            let info = { id: sku, barcode: sku };
-            let totalQty = 0;
-            let totalWorkedQty = 0;
-
-            for(const order of STATE.orderPool) {
-                // Check if this SKU is in this tote for this order
-                if (order.skuInfo[sku]) {
-                    info = order.skuInfo[sku];
-                }
-                
-                // Calculate quantity in this tote for this SKU
-                const pickingItems = order.pickingToteList.filter(pt => pt.tote === toteId && pt.sku === sku);
-                pickingItems.forEach(pt => {
-                    totalQty += pt.qty;
-                    totalWorkedQty += pt.workedQty;
+        const entries = [];
+        for (const order of STATE.orderPool) {
+            if (!order.pickingToteList) continue;
+            order.pickingToteList.filter(pt => pt.tote === toteId).forEach(pt => {
+                const info = order.skuInfo[pt.sku] || { id: pt.sku, barcode: pt.sku };
+                const oid = pt.orderId || order.orderId;
+                entries.push({
+                    barcode: info.barcode,
+                    skuId: info.id,
+                    omsOrderId: pt.omsOrderId || order.omsOrderId,
+                    orderId: oid,
+                    orderItemId: pt.orderItemId || '-',
+                    qty: pt.qty,
+                    workedQty: pt.workedQty,
+                    gridNo: findGridByOrderId(oid)
                 });
-            }
+            });
+        }
 
-            const isDone = totalWorkedQty >= totalQty;
+        const rows = entries.map(e => {
+            const isDone = e.workedQty >= e.qty;
             const rowStyle = isDone ? 'color:#2ecc71; text-decoration:line-through; opacity:0.7;' : 'color:#636e72;';
             const qtyStyle = isDone ? 'color:#2ecc71; font-weight:bold;' : 'color:#2d3436; font-weight:bold;';
 
             return `
                 <div class="vms-sku-row" style="${rowStyle}">
-                    <span class="vms-sku-code" style="flex:1; ${isDone ? 'color:#2ecc71;' : ''}" title="${info.barcode}">${info.barcode}</span>
-                    <span style="flex:1; text-align:center;">${info.id}</span>
-                    <span style="width:50px; text-align:right; ${qtyStyle}">${totalWorkedQty} / ${totalQty}</span>
+                    <span class="vms-sku-code" style="flex:3; ${isDone ? 'color:#2ecc71;' : ''}" title="${e.barcode}">${e.barcode}</span>
+                    <span style="flex:2; text-align:center;">${e.skuId}</span>
+                    <span style="flex:2; text-align:center; font-size:10px;">${e.omsOrderId}</span>
+                    <span style="flex:2; text-align:center; font-size:10px; font-weight:bold; ${isDone ? '' : 'color:#6c5ce7;'}">${e.gridNo}</span>
+                    <span style="flex:2; text-align:center; font-size:10px;">${e.orderId}</span>
+                    <span style="flex:2; text-align:center; font-size:10px;">${e.orderItemId}</span>
+                    <span style="width:50px; text-align:right; ${qtyStyle}">${e.workedQty} / ${e.qty}</span>
                 </div>
             `;
         }).join('');
@@ -1479,18 +1527,135 @@
         card.innerHTML = `
             <div class="vms-tote-header">
                 <span>${toteId}</span>
-                <span style="background:#dfe6e9; padding:2px 6px; border-radius:10px; font-size:11px; font-weight:normal;">${skuSet.size} SKUs</span>
+                <span style="background:#dfe6e9; padding:2px 6px; border-radius:10px; font-size:11px; font-weight:normal;">${entries.length} items</span>
             </div>
             <div style="font-size:10px; color:#b2bec3; display:flex; padding:4px 0; border-bottom:1px solid #eee; margin-bottom:5px;">
-                <span style="flex:1;">Barcode</span>
-                <span style="flex:1; text-align:center;">SKU ID</span>
+                <span style="flex:3;">Barcode</span>
+                <span style="flex:2; text-align:center;">SKU ID</span>
+                <span style="flex:2; text-align:center;">물류접수번호</span>
+                <span style="flex:2; text-align:center;">Grid</span>
+                <span style="flex:2; text-align:center;">주문ID</span>
+                <span style="flex:2; text-align:center;">주문아이템</span>
                 <span style="width:50px; text-align:right;">Done/Qty</span>
             </div>
-            <div>${skuRows}</div>
+            <div>${rows || '<div style="text-align:center; padding:10px; color:#ccc;">정보 없음</div>'}</div>
         `;
 
         return card;
     }
+
+    // ── 📦 실시간 재고 탭 ──
+    function renderRealtimeTab(container) {
+        if (!STATE.allocatedStockList || STATE.allocatedStockList.length === 0) {
+            container.innerHTML = '<div style="text-align:center; padding:20px; color:#bdc3c7;">실시간 재고 데이터가 없습니다.</div>';
+            return;
+        }
+
+        const grouped = {};
+        STATE.allocatedStockList.forEach(item => {
+            const tote = item.picking_tote_name;
+            if (!grouped[tote]) grouped[tote] = [];
+            grouped[tote].push(item);
+        });
+
+        const swapLookup = buildSwapLookup();
+
+        Object.keys(grouped).sort().forEach(toteId => {
+            const card = createRealtimeToteCard(toteId, grouped[toteId], swapLookup);
+            container.appendChild(card);
+        });
+    }
+
+    function buildSwapLookup() {
+        const keys = new Set();
+        for (const order of STATE.orderPool) {
+            if (!order.pickingToteList) continue;
+            for (const pt of order.pickingToteList) {
+                keys.add(`${pt.tote}|${pt.sku}|${order.omsOrderId}`);
+            }
+        }
+        return keys;
+    }
+
+    function findGridByOrderId(orderId) {
+        if (!orderId) return '-';
+        const grid = STATE.grids.find(g => g.assignedOrderId === orderId);
+        if (!grid) return '-';
+        const gridNum = STATE.grids.indexOf(grid) + 1;
+        return 'GRID-' + String(gridNum).padStart(2, '0');
+    }
+
+    function isSwapped(toteId, sku, omsOrderId, swapLookup) {
+        return !swapLookup.has(`${toteId}|${sku}|${omsOrderId}`);
+    }
+
+    function findPickingToteQty(toteId, sku) {
+        let total = 0;
+        for (const order of STATE.orderPool) {
+            if (!order.pickingToteList) continue;
+            for (const pt of order.pickingToteList) {
+                if (pt.tote === toteId && pt.sku === sku) {
+                    total += pt.qty;
+                }
+            }
+        }
+        return total;
+    }
+
+    function createRealtimeToteCard(toteId, items, swapLookup) {
+        const card = document.createElement('div');
+        card.className = 'vms-tote-card';
+
+        const swappedCount = items.filter(item =>
+            isSwapped(toteId, item.barcode || item.sku_id, item.oms_order_id, swapLookup)
+        ).length;
+
+        const rows = items.map(item => {
+            const sku = item.barcode || item.sku_id;
+            const swapped = isSwapped(toteId, sku, item.oms_order_id, swapLookup);
+
+            const swapIcon = swapped ? '🔄 ' : '';
+            const rowClass = swapped ? 'vms-sku-row vms-swapped-row' : 'vms-sku-row';
+
+            const gridNo = findGridByOrderId(item.order_id);
+
+            return `
+                <div class="${rowClass}">
+                    <span class="vms-sku-code" style="flex:3;" title="${item.barcode}">${swapIcon}${item.barcode}</span>
+                    <span style="flex:2; text-align:center;">${item.sku_id}</span>
+                    <span style="flex:2; text-align:center; font-size:10px;">${item.oms_order_id}</span>
+                    <span style="flex:2; text-align:center; font-size:10px; font-weight:bold; ${swapped ? 'color:#e67e22;' : 'color:#6c5ce7;'}">${gridNo}</span>
+                    <span style="flex:2; text-align:center; font-size:10px;">${item.order_id}</span>
+                    <span style="flex:2; text-align:center; font-size:10px;">${item.order_item_id}</span>
+                    <span style="width:30px; text-align:right; font-weight:bold;">${item.qty}</span>
+                </div>
+            `;
+        }).join('');
+
+        const swapBadge = swappedCount > 0
+            ? `<span style="background:#ffeaa7; color:#e67e22; padding:2px 6px; border-radius:10px; font-size:10px; margin-left:5px;">🔄 ${swappedCount}</span>`
+            : '';
+
+        card.innerHTML = `
+            <div class="vms-tote-header">
+                <span>${toteId}${swapBadge}</span>
+                <span style="background:#dfe6e9; padding:2px 6px; border-radius:10px; font-size:11px; font-weight:normal;">${items.length} items</span>
+            </div>
+            <div style="font-size:10px; color:#b2bec3; display:flex; padding:4px 0; border-bottom:1px solid #eee; margin-bottom:5px;">
+                <span style="flex:3;">Barcode</span>
+                <span style="flex:2; text-align:center;">SKU ID</span>
+                <span style="flex:2; text-align:center;">물류접수번호</span>
+                <span style="flex:2; text-align:center;">Grid</span>
+                <span style="flex:2; text-align:center;">주문ID</span>
+                <span style="flex:2; text-align:center;">주문아이템</span>
+                <span style="width:30px; text-align:right;">수량</span>
+            </div>
+            <div>${rows}</div>
+        `;
+
+        return card;
+    }
+
     // 15. DRAG & DROP FUNCTIONALITY
     // ========================================
     let dragState = {
@@ -1574,15 +1739,28 @@
             }
             .vms-ctrl-btn:hover { color: #fff; }
 
+            /* Tab Bar */
+            .vms-tab-bar { display: flex; background: #f0f0f0; border-bottom: 1px solid #dfe6e9; }
+            .vms-tab-btn {
+                flex: 1; padding: 8px 4px; border: none; background: transparent;
+                cursor: pointer; font-size: 12px; color: #636e72;
+                border-bottom: 2px solid transparent; transition: all 0.2s;
+            }
+            .vms-tab-btn:hover { background: #e8e8e8; }
+            .vms-tab-btn.active { color: #0984e3; border-bottom: 2px solid #0984e3; font-weight: bold; background: #fff; }
+
+            /* Swapped Row Highlight */
+            .vms-swapped-row { background: #fef5e7 !important; border-left: 3px solid #e67e22; padding-left: 5px; }
+
             /* Side Panel for 피킹 토트 */
             .vms-side-panel {
                 position: absolute; top: 0; left: 100%;
-                width: 320px; height: 100%;
+                width: 700px; height: 100%;
                 background: #fff; border: 1px solid #bdc3c7;
                 box-shadow: 5px 5px 20px rgba(0,0,0,0.1);
                 border-radius: 12px; margin-left: 15px;
                 display: flex; flex-direction: column;
-                transition: opacity 0.3s, transform 0.3s;
+                transition: width 0.3s ease, opacity 0.3s, transform 0.3s;
                 opacity: 0; transform: translateX(-20px); pointer-events: none;
                 z-index: 99990;
             }
