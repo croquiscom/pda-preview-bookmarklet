@@ -415,22 +415,25 @@
         const targetGrid = newGrids[gridIdx];
 
         if (serverGrid.orders && serverGrid.orders.length > 0) {
-            const order = serverGrid.orders[0];
-            const orderData = processServerOrder(order, targetGrid, newToteInventory);
-            newOrderPool.push(orderData);
+            serverGrid.orders.forEach((order, idx) => {
+                const orderData = processServerOrder(order, targetGrid, newToteInventory, idx > 0);
+                newOrderPool.push(orderData);
+            });
         }
     }
 
-    function processServerOrder(order, targetGrid, newToteInventory) {
-        targetGrid.status = 'ACTIVE';
-        targetGrid.assignedOrderId = order.order_id;
+    function processServerOrder(order, targetGrid, newToteInventory, isSecondary) {
+        if (!isSecondary) {
+            targetGrid.status = 'ACTIVE';
+            targetGrid.assignedOrderId = order.order_id;
 
-        if (order.assorted_tote) {
-            targetGrid.destTote = order.assorted_tote;
-            targetGrid.isVirtualTote = false;
-        } else {
-            targetGrid.destTote = null;
-            targetGrid.isVirtualTote = false;
+            if (order.assorted_tote) {
+                targetGrid.destTote = order.assorted_tote;
+                targetGrid.isVirtualTote = false;
+            } else {
+                targetGrid.destTote = null;
+                targetGrid.isVirtualTote = false;
+            }
         }
 
         const requiredItems = {};
@@ -443,7 +446,9 @@
             requiredItems[sku] = item.total_qty;
             skuInfo[sku] = { id: item.sku_id, barcode: item.barcode };
 
-            targetGrid.scannedItems[sku] = item.total_worked_qty;
+            if (!isSecondary) {
+                targetGrid.scannedItems[sku] = item.total_worked_qty;
+            }
 
             if (item.total_worked_qty < item.total_qty) {
                 isOrderComplete = false;
@@ -454,7 +459,7 @@
             }
         });
 
-        if (isOrderComplete) targetGrid.status = 'COMPLETE';
+        if (!isSecondary && isOrderComplete) targetGrid.status = 'COMPLETE';
 
         return {
             orderId: order.order_id,
@@ -914,6 +919,14 @@
     }
 
     function isValidSkuForCurrentTote(sku) {
+        // 실시간 재고 기반으로 검증 (allocatedStockList 우선)
+        if (STATE.allocatedStockList && STATE.allocatedStockList.length > 0) {
+            return STATE.allocatedStockList.some(item =>
+                item.picking_tote_name === STATE.sourceTote &&
+                (item.barcode === sku || item.sku_id === sku)
+            );
+        }
+        // fallback: 작업지시 기반
         const validSkusInTote = STATE.toteInventory[STATE.sourceTote];
         return validSkusInTote && validSkusInTote.has(sku);
     }
@@ -1066,20 +1079,27 @@
     }
 
     function findExistingGridForSku(sku) {
+        // 순서대로 아직 완료되지 않은 ACTIVE grid를 찾음 (SKU 무관, 번호순)
         return STATE.grids.find(grid => {
             if (grid.status !== 'ACTIVE') return false;
 
             const order = STATE.orderPool.find(o => o.orderId === grid.assignedOrderId);
-            const scanned = grid.scannedItems[sku] || 0;
-            const required = order.requiredItems[sku] || 0;
+            if (!order) return false;
 
-            return scanned < required;
+            // grid의 전체 필요수량 대비 스캔수량 확인
+            const totalRequired = Object.values(order.requiredItems).reduce((a, b) => a + b, 0);
+            const totalScanned = Object.values(grid.scannedItems)
+                .filter(v => typeof v === 'number')
+                .reduce((a, b) => a + b, 0);
+
+            return totalScanned < totalRequired;
         });
     }
 
     function allocateNewGridForSku(sku) {
+        // 아직 grid에 할당되지 않은 미완료 주문을 순서대로 찾음 (SKU 무관)
         const candidateOrder = STATE.orderPool.find(o =>
-            !o.allocatedSlot && !o.isComplete && (o.requiredItems[sku] > 0)
+            !o.allocatedSlot && !o.isComplete
         );
 
         if (!candidateOrder) return null;
@@ -1580,9 +1600,16 @@
     function findGridByOrderId(orderId) {
         if (!orderId) return '-';
         const grid = STATE.grids.find(g => g.assignedOrderId === orderId);
-        if (!grid) return '-';
-        const gridNum = STATE.grids.indexOf(grid) + 1;
-        return 'GRID-' + String(gridNum).padStart(2, '0');
+        if (grid) {
+            const gridNum = STATE.grids.indexOf(grid) + 1;
+            return 'GRID-' + String(gridNum).padStart(2, '0');
+        }
+        const order = STATE.orderPool.find(o => o.orderId === orderId);
+        if (order && order.allocatedSlot) {
+            const slotNum = parseInt(order.allocatedSlot.replace('GRID-', ''));
+            if (!isNaN(slotNum)) return 'GRID-' + String(slotNum).padStart(2, '0');
+        }
+        return '-';
     }
 
     function isSwapped(toteId, sku, omsOrderId, swapLookup) {
